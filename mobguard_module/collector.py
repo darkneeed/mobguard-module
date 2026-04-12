@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import uuid as uuidlib
 from datetime import datetime
 from typing import Any
 
@@ -24,12 +25,22 @@ def parse_access_line(line: str, inbound_tags: tuple[str, ...]) -> dict[str, Any
     ip_match = REGEX_IP.search(line)
     if not uuid_match or not ip_match:
         return None
-    return {
+    raw_identifier = uuid_match.group(1).strip()
+    payload: dict[str, Any] = {
         "occurred_at": datetime.utcnow().replace(microsecond=0).isoformat(),
-        "uuid": uuid_match.group(1),
         "ip": ip_match.group(1),
         "tag": tag,
     }
+    if raw_identifier.isdigit():
+        payload["system_id"] = int(raw_identifier)
+        return payload
+    try:
+        uuidlib.UUID(raw_identifier)
+        payload["uuid"] = raw_identifier
+        return payload
+    except ValueError:
+        payload["username"] = raw_identifier
+        return payload
 
 
 class AccessLogCollector:
