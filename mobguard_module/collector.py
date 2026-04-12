@@ -14,10 +14,10 @@ REGEX_UUID = re.compile(r"email: (\S+)")
 REGEX_IP = re.compile(r"from (?:tcp:|udp:)?(\d+\.\d+\.\d+\.\d+)")
 
 
-def parse_access_line(line: str, mobile_tags: tuple[str, ...]) -> dict[str, Any] | None:
+def parse_access_line(line: str, inbound_tags: tuple[str, ...]) -> dict[str, Any] | None:
     if "accepted" not in line:
         return None
-    tag = next((item for item in mobile_tags if item and item in line), None)
+    tag = next((item for item in inbound_tags if item and item in line), None)
     if not tag:
         return None
     uuid_match = REGEX_UUID.search(line)
@@ -52,7 +52,7 @@ class AccessLogCollector:
                 line = handle.readline()
                 if not line:
                     break
-                parsed = parse_access_line(line, config.mobile_tags)
+                parsed = parse_access_line(line, config.inbound_tags)
                 if parsed:
                     parsed["log_offset"] = line_offset
                     parsed["event_uid"] = hashlib.sha256(

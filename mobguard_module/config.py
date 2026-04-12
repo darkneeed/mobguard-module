@@ -27,6 +27,26 @@ def _env_int(values: dict[str, str], key: str, default: int) -> int:
         return default
 
 
+def _config_int(value: Any, default: int, *, field_name: str) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    return parsed
+
+
+def _config_tags(value: Any) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("rules.inbound_tags must be a list")
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
 @dataclass(frozen=True)
 class ModuleConfig:
     panel_base_url: str
@@ -42,7 +62,7 @@ class ModuleConfig:
     max_spool_events: int = 5000
     protocol_version: str = "v1"
     config_revision: int = 0
-    mobile_tags: tuple[str, ...] = ()
+    inbound_tags: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "ModuleConfig":
@@ -66,13 +86,40 @@ class ModuleConfig:
             return self
         runtime = envelope.get("module_runtime", {}) if isinstance(envelope.get("module_runtime"), dict) else {}
         rules = envelope.get("rules", {}) if isinstance(envelope.get("rules"), dict) else {}
+        inbound_tags = rules.get("inbound_tags")
+        if inbound_tags in (None, ""):
+            inbound_tags = rules.get("mobile_tags", [])
         return replace(
             self,
-            heartbeat_interval_seconds=int(runtime.get("heartbeat_interval_seconds", self.heartbeat_interval_seconds)),
-            config_poll_interval_seconds=int(runtime.get("config_poll_interval_seconds", self.config_poll_interval_seconds)),
-            flush_interval_seconds=int(runtime.get("flush_interval_seconds", self.flush_interval_seconds)),
-            event_batch_size=int(runtime.get("event_batch_size", self.event_batch_size)),
-            max_spool_events=int(runtime.get("max_spool_events", self.max_spool_events)),
-            config_revision=int(envelope.get("config_revision") or self.config_revision),
-            mobile_tags=tuple(str(item) for item in rules.get("mobile_tags", [])),
+            heartbeat_interval_seconds=_config_int(
+                runtime.get("heartbeat_interval_seconds"),
+                self.heartbeat_interval_seconds,
+                field_name="module_runtime.heartbeat_interval_seconds",
+            ),
+            config_poll_interval_seconds=_config_int(
+                runtime.get("config_poll_interval_seconds"),
+                self.config_poll_interval_seconds,
+                field_name="module_runtime.config_poll_interval_seconds",
+            ),
+            flush_interval_seconds=_config_int(
+                runtime.get("flush_interval_seconds"),
+                self.flush_interval_seconds,
+                field_name="module_runtime.flush_interval_seconds",
+            ),
+            event_batch_size=_config_int(
+                runtime.get("event_batch_size"),
+                self.event_batch_size,
+                field_name="module_runtime.event_batch_size",
+            ),
+            max_spool_events=_config_int(
+                runtime.get("max_spool_events"),
+                self.max_spool_events,
+                field_name="module_runtime.max_spool_events",
+            ),
+            config_revision=_config_int(
+                envelope.get("config_revision"),
+                self.config_revision or 1,
+                field_name="config_revision",
+            ),
+            inbound_tags=_config_tags(inbound_tags),
         )
