@@ -42,6 +42,12 @@ Required keys:
 - `MODULE_TOKEN`
 - `ACCESS_LOG_PATH`
 
+## Test
+
+```bash
+pytest -q
+```
+
 ## Build
 
 Windows:
@@ -75,4 +81,3 @@ or with Docker:
 ```bash
 docker compose up -d
 ```
-# mobguard-module
