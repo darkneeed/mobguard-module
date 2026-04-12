@@ -18,7 +18,24 @@ git clone <module-repo-url> module
 cd module
 ```
 
-## Required `.env` keys
+## Primary install flow
+
+1. Create the module card in the panel.
+2. Copy the generated `docker-compose.yml` from the install bundle.
+3. Reveal the module token in the panel and replace `MODULE_TOKEN=__PASTE_TOKEN__`.
+4. Run:
+
+```bash
+docker compose up -d && docker compose logs -f -t
+```
+
+The panel-generated compose file is now the primary install path.
+
+## Local `.env` fallback
+
+If you want to build or run the module manually without the panel-generated compose file, keep using `.env`.
+
+Required keys:
 
 - `PANEL_BASE_URL`
 - `MODULE_ID`
@@ -42,10 +59,10 @@ Linux/macOS:
 What the build script does:
 
 1. creates `.env` from `.env.example` if needed
-2. validates required env keys are present
+2. validates required env keys are present for the fallback flow
 3. ensures `state/` and `state/spool/` exist
 4. runs `docker compose build`
-5. runs a short config smoke-check
+5. runs a short smoke-check inside the built `mobguard-module` container
 
 ## Run
 

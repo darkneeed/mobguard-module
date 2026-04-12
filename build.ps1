@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
+Write-Host '[INFO] Primary install path is the panel-generated docker-compose.yml; local .env remains a fallback for manual builds'
+
 function Get-EnvMap {
     param([string]$Path)
 
@@ -38,17 +40,7 @@ if ($missing.Count -gt 0) {
 New-Item -ItemType Directory -Force 'state', 'state\spool' | Out-Null
 
 Get-Command docker | Out-Null
-Get-Command python | Out-Null
 
 docker compose build
-@'
-from mobguard_module.config import ModuleConfig
-cfg = ModuleConfig.from_env('.env')
-assert cfg.panel_base_url
-assert cfg.module_id
-assert cfg.module_token
-assert cfg.access_log_path
-print(cfg.module_id)
-'@ | python -
-
-Write-Host '[OK] Module build and smoke-check passed'
+docker compose run --rm mobguard-module python -c "from mobguard_module.config import ModuleConfig; cfg = ModuleConfig.from_env('.env'); assert cfg.panel_base_url; assert cfg.module_id; assert cfg.module_token; assert cfg.access_log_path; print(cfg.module_id)"
+Write-Host '[OK] Module build and container smoke-check passed'

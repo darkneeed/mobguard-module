@@ -5,8 +5,13 @@ services:
       dockerfile: Dockerfile
     container_name: mobguard-module
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      PANEL_BASE_URL: ${PANEL_BASE_URL:-}
+      MODULE_ID: ${MODULE_ID:-}
+      MODULE_TOKEN: ${MODULE_TOKEN:-}
+      ACCESS_LOG_PATH: ${ACCESS_LOG_PATH:-/var/log/remnanode/access.log}
+      STATE_DIR: ${STATE_DIR:-./state}
+      SPOOL_DIR: ${SPOOL_DIR:-./state/spool}
     volumes:
       - ./state:/app/state
       - ${ACCESS_LOG_PATH:-/var/log/remnanode/access.log}:${ACCESS_LOG_PATH:-/var/log/remnanode/access.log}:ro
