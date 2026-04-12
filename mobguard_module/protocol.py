@@ -42,17 +42,17 @@ class PanelProtocolClient:
             raise RuntimeError(f"{method} {path} failed: {exc.reason}") from exc
 
     def register(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/register", payload=payload)
+        return self._request("POST", "/modules/register", payload=payload)
 
     def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/heartbeat", payload=payload)
+        return self._request("POST", "/modules/heartbeat", payload=payload)
 
     def fetch_config(self, module_id: str, protocol_version: str = "v1") -> dict[str, Any]:
         return self._request(
             "GET",
-            "/module/config",
+            "/modules/config",
             query={"module_id": module_id, "protocol_version": protocol_version},
         )
 
     def send_events(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/events/batch", payload=payload)
+        return self._request("POST", "/modules/events/batch", payload=payload)
