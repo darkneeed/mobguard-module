@@ -1,0 +1,12 @@
+services:
+  mobguard-module:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mobguard-module
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./state:/app/state
+      - ${ACCESS_LOG_PATH:-/var/log/remnanode/access.log}:${ACCESS_LOG_PATH:-/var/log/remnanode/access.log}:ro
