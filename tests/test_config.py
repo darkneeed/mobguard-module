@@ -1,4 +1,6 @@
-from mobguard_module.config import ModuleConfig
+import pytest
+
+from mobguard_module.config import MAX_EVENT_BATCH_SIZE, ModuleConfig
 
 
 def test_module_config_can_bootstrap_from_process_env(monkeypatch, tmp_path):
@@ -59,3 +61,33 @@ def test_module_config_prefers_inbound_tags_and_falls_back_to_mobile_tags(monkey
     )
 
     assert fallback.inbound_tags == ("OLD-A", "OLD-B")
+
+
+def test_module_config_rejects_pathological_batch_sizes(monkeypatch, tmp_path):
+    monkeypatch.setenv("PANEL_BASE_URL", "https://panel.example.com")
+    monkeypatch.setenv("MODULE_ID", "module-test")
+    monkeypatch.setenv("MODULE_TOKEN", "token-test")
+
+    cfg = ModuleConfig.from_env(str(tmp_path / "missing.env"))
+
+    with pytest.raises(ValueError, match="event_batch_size"):
+        cfg.apply_remote_config(
+            {
+                "config_revision": 2,
+                "module_runtime": {
+                    "event_batch_size": MAX_EVENT_BATCH_SIZE + 1,
+                    "max_spool_events": MAX_EVENT_BATCH_SIZE + 10,
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="must not exceed"):
+        cfg.apply_remote_config(
+            {
+                "config_revision": 2,
+                "module_runtime": {
+                    "event_batch_size": 200,
+                    "max_spool_events": 100,
+                },
+            }
+        )

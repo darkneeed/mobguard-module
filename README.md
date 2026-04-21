@@ -29,7 +29,33 @@ cd module
 docker compose up -d && docker compose logs -f -t
 ```
 
-The panel-generated compose file is now the primary install path.
+The panel-generated compose file is the canonical install path.
+
+## Remote config contract
+
+The module keeps protocol `v1` and accepts remote config from the panel without changing the HTTP surface.
+
+Remote config precedence for tags is:
+
+1. `rules.inbound_tags`
+2. fallback to `rules.mobile_tags`
+
+Runtime controls are still delivered through `module_runtime`:
+
+- `heartbeat_interval_seconds`
+- `config_poll_interval_seconds`
+- `flush_interval_seconds`
+- `event_batch_size`
+- `max_spool_events`
+
+## Spool and retry guarantees
+
+- Buffered events are still persisted as JSONL on disk.
+- Spool writes are append-only in the steady state.
+- Spool depth is tracked via metadata and does not require a full file scan.
+- Dropped or acknowledged items advance the logical spool head and are compacted opportunistically.
+- Event batch uploads are not retried automatically after a response could already have been accepted by the panel.
+- `fetch_config` may retry once on transport failure only.
 
 ## Local `.env` fallback
 
@@ -53,7 +79,7 @@ pytest -q
 Windows:
 
 ```powershell
-.\build.ps1
+.uild.ps1
 ```
 
 Linux/macOS:

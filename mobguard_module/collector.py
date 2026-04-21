@@ -15,6 +15,26 @@ REGEX_UUID = re.compile(r"email: (\S+)")
 REGEX_IP = re.compile(r"from (?:tcp:|udp:)?(\d+\.\d+\.\d+\.\d+)")
 
 
+def _utcnow() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat()
+
+
+def _event_uid(module_id: str, line_offset: int, line: str) -> str:
+    return hashlib.sha256(f"{module_id}|{line_offset}|{line}".encode("utf-8")).hexdigest()
+
+
+def _file_fingerprint(path: str) -> str | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    inode = getattr(stat, "st_ino", 0)
+    device = getattr(stat, "st_dev", 0)
+    if inode:
+        return f"{device}:{inode}"
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
 def parse_access_line(line: str, inbound_tags: tuple[str, ...]) -> dict[str, Any] | None:
     if "accepted" not in line:
         return None
@@ -27,7 +47,7 @@ def parse_access_line(line: str, inbound_tags: tuple[str, ...]) -> dict[str, Any
         return None
     raw_identifier = uuid_match.group(1).strip()
     payload: dict[str, Any] = {
-        "occurred_at": datetime.utcnow().replace(microsecond=0).isoformat(),
+        "occurred_at": _utcnow(),
         "ip": ip_match.group(1),
         "tag": tag,
     }
@@ -45,15 +65,18 @@ def parse_access_line(line: str, inbound_tags: tuple[str, ...]) -> dict[str, Any
 
 class AccessLogCollector:
     def __init__(self, config: ModuleConfig, state: LocalState):
-        self.config = config
         self.state = state
 
     def collect_once(self, config: ModuleConfig) -> list[dict[str, Any]]:
         if not os.path.exists(config.access_log_path):
             return []
-        offset = self.state.get_cursor()
+        cursor_state = self.state.get_cursor_state()
+        offset = int(cursor_state.get("offset") or 0)
+        current_fingerprint = _file_fingerprint(config.access_log_path)
+        stored_fingerprint = cursor_state.get("file_fingerprint")
         size = os.path.getsize(config.access_log_path)
-        if offset > size:
+        # Reset cursor when the file shrinks or when the path now points at a rotated file.
+        if offset > size or (stored_fingerprint and current_fingerprint and stored_fingerprint != current_fingerprint):
             offset = 0
         events: list[dict[str, Any]] = []
         with open(config.access_log_path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -66,10 +89,8 @@ class AccessLogCollector:
                 parsed = parse_access_line(line, config.inbound_tags)
                 if parsed:
                     parsed["log_offset"] = line_offset
-                    parsed["event_uid"] = hashlib.sha256(
-                        f"{config.module_id}|{line_offset}|{line}".encode("utf-8")
-                    ).hexdigest()
+                    parsed["event_uid"] = _event_uid(config.module_id, line_offset, line)
                     events.append(parsed)
             offset = handle.tell()
-        self.state.set_cursor(offset)
+        self.state.set_cursor_state(offset, current_fingerprint)
         return events

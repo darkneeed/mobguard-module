@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -12,12 +12,11 @@ from .protocol import PanelProtocolClient
 from .state import LocalState
 
 
+LOOP_SLEEP_SECONDS = 0.5
+
+
 def _utcnow() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat()
-
-
-def _spool_depth(config: ModuleConfig, state: LocalState) -> int:
-    return len(state.read_spool(config.max_spool_events))
 
 
 @dataclass
@@ -31,7 +30,7 @@ class ModuleHealthState:
 
     def _refresh_runtime(self, config: ModuleConfig, state: LocalState) -> tuple[bool, int]:
         self.access_log_exists = os.path.exists(config.access_log_path)
-        self.spool_depth = _spool_depth(config, state)
+        self.spool_depth = state.get_spool_depth()
         self.last_validation_at = _utcnow()
         return self.access_log_exists, self.spool_depth
 
@@ -85,52 +84,138 @@ class ModuleHealthState:
         }
 
 
-def _apply_remote_config(config: ModuleConfig, state: LocalState, response: dict[str, Any] | None) -> ModuleConfig:
+@dataclass(frozen=True)
+class ModuleRuntime:
+    config: ModuleConfig
+    state: LocalState
+    client: PanelProtocolClient
+    collector: AccessLogCollector
+    health: ModuleHealthState
+
+
+def _apply_remote_config(runtime: ModuleRuntime, response: dict[str, Any] | None) -> ModuleRuntime:
     envelope = (response or {}).get("config") if isinstance((response or {}).get("config"), dict) else response
     if not isinstance(envelope, dict):
-        return config
-    updated = config.apply_remote_config(envelope)
-    state.save_cached_config(envelope)
-    return updated
+        return runtime
+    updated_config = runtime.config.apply_remote_config(envelope)
+    runtime.state.save_cached_config(envelope)
+    return replace(runtime, config=updated_config, collector=AccessLogCollector(updated_config, runtime.state))
 
 
-def main() -> None:
-    config = ModuleConfig.from_env()
+def _bootstrap_runtime(env_path: str = ".env") -> tuple[ModuleRuntime, bool]:
+    config = ModuleConfig.from_env(env_path)
     if not config.panel_base_url or not config.module_id or not config.module_token:
         raise SystemExit("PANEL_BASE_URL, MODULE_ID and MODULE_TOKEN are required")
-
     state = LocalState(config.state_dir, config.spool_dir)
     state.ensure_dirs()
     cached_config = state.load_cached_config()
     if cached_config:
         config = config.apply_remote_config(cached_config)
-
-    client = PanelProtocolClient(config.panel_base_url, config.module_token)
-    collector = AccessLogCollector(config, state)
     health = ModuleHealthState()
-    health.mark_ok(config, state)
+    runtime = ModuleRuntime(
+        config=config,
+        state=state,
+        client=PanelProtocolClient(config.panel_base_url, config.module_token),
+        collector=AccessLogCollector(config, state),
+        health=health,
+    )
+    runtime.health.mark_ok(runtime.config, runtime.state)
+    return runtime, bool(cached_config)
 
+
+def _register_payload(runtime: ModuleRuntime) -> dict[str, Any]:
+    return {
+        "module_id": runtime.config.module_id,
+        "module_name": runtime.config.module_id,
+        "version": "1.0.0",
+        "protocol_version": runtime.config.protocol_version,
+        "config_revision_applied": runtime.config.config_revision,
+    }
+
+
+def _batch_payload(runtime: ModuleRuntime, batch: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "module_id": runtime.config.module_id,
+        "protocol_version": runtime.config.protocol_version,
+        "items": batch,
+    }
+
+
+def _heartbeat_payload(runtime: ModuleRuntime) -> dict[str, Any]:
+    return {
+        "module_id": runtime.config.module_id,
+        "status": "online",
+        "version": "1.0.0",
+        "protocol_version": runtime.config.protocol_version,
+        "config_revision_applied": runtime.config.config_revision,
+        "details": runtime.health.to_details(runtime.config, runtime.state),
+    }
+
+
+def _run_register_phase(runtime: ModuleRuntime, *, allow_cached_bootstrap: bool) -> ModuleRuntime:
     try:
-        register_response = client.register(
-            {
-                "module_id": config.module_id,
-                "module_name": config.module_id,
-                "version": "1.0.0",
-                "protocol_version": config.protocol_version,
-                "config_revision_applied": config.config_revision,
-            }
-        )
-        config = _apply_remote_config(config, state, register_response)
-        collector = AccessLogCollector(config, state)
-        health.mark_ok(config, state)
+        response = runtime.client.register(_register_payload(runtime))
+        runtime = _apply_remote_config(runtime, response)
+        runtime.health.mark_ok(runtime.config, runtime.state)
     except ValueError as exc:
-        health.mark_error(config, state, f"Invalid remote config on register: {exc}", issue_source="config")
-        if not cached_config:
+        runtime.health.mark_error(runtime.config, runtime.state, f"Invalid remote config on register: {exc}", issue_source="config")
+        if not allow_cached_bootstrap:
             raise
     except RuntimeError as exc:
-        health.mark_warn(config, state, f"Register failed: {exc}", issue_source="register")
-        if not cached_config:
+        runtime.health.mark_warn(runtime.config, runtime.state, f"Register failed: {exc}", issue_source="register")
+        if not allow_cached_bootstrap:
             raise
+    return runtime
+
+
+def _run_config_sync_phase(runtime: ModuleRuntime) -> ModuleRuntime:
+    try:
+        response = runtime.client.fetch_config(runtime.config.module_id, runtime.config.protocol_version)
+        runtime = _apply_remote_config(runtime, response)
+        runtime.health.mark_ok(runtime.config, runtime.state)
+    except ValueError as exc:
+        runtime.health.mark_error(runtime.config, runtime.state, f"Invalid remote config: {exc}", issue_source="config")
+    except RuntimeError as exc:
+        runtime.health.mark_warn(runtime.config, runtime.state, f"Config sync failed: {exc}", issue_source="config_fetch")
+    return runtime
+
+
+def _run_collect_phase(runtime: ModuleRuntime) -> None:
+    new_events = runtime.collector.collect_once(runtime.config)
+    if new_events:
+        runtime.state.append_events(new_events, max_items=runtime.config.max_spool_events)
+
+
+def _run_flush_phase(runtime: ModuleRuntime) -> None:
+    batch = runtime.state.read_spool(runtime.config.event_batch_size)
+    if batch:
+        try:
+            runtime.client.send_events(_batch_payload(runtime, batch))
+            runtime.state.drop_spool_items(len(batch))
+            if runtime.health.issue_source == "batch":
+                runtime.health.mark_ok(runtime.config, runtime.state)
+        except RuntimeError as exc:
+            runtime.health.mark_warn(runtime.config, runtime.state, f"Event batch upload failed: {exc}", issue_source="batch")
+    elif runtime.health.issue_source == "batch":
+        runtime.health.mark_ok(runtime.config, runtime.state)
+
+
+def _run_heartbeat_phase(runtime: ModuleRuntime) -> ModuleRuntime:
+    try:
+        heartbeat = runtime.client.heartbeat(_heartbeat_payload(runtime))
+        desired_revision = int((heartbeat or {}).get("desired_config_revision") or runtime.config.config_revision)
+        if desired_revision != runtime.config.config_revision:
+            runtime = _run_config_sync_phase(runtime)
+        elif runtime.health.issue_source in {"heartbeat", "register"}:
+            runtime.health.mark_ok(runtime.config, runtime.state)
+    except RuntimeError as exc:
+        runtime.health.mark_warn(runtime.config, runtime.state, f"Heartbeat failed: {exc}", issue_source="heartbeat")
+    return runtime
+
+
+def main() -> None:
+    runtime, has_cached_config = _bootstrap_runtime()
+    runtime = _run_register_phase(runtime, allow_cached_bootstrap=has_cached_config)
 
     last_heartbeat = 0.0
     last_config_poll = 0.0
@@ -139,69 +224,18 @@ def main() -> None:
     while True:
         now = time.monotonic()
 
-        if now - last_config_poll >= config.config_poll_interval_seconds:
-            try:
-                config_response = client.fetch_config(config.module_id, config.protocol_version)
-                config = _apply_remote_config(config, state, config_response)
-                collector = AccessLogCollector(config, state)
-                health.mark_ok(config, state)
-            except ValueError as exc:
-                health.mark_error(config, state, f"Invalid remote config: {exc}", issue_source="config")
-            except RuntimeError as exc:
-                health.mark_warn(config, state, f"Config sync failed: {exc}", issue_source="config_fetch")
+        if now - last_config_poll >= runtime.config.config_poll_interval_seconds:
+            runtime = _run_config_sync_phase(runtime)
             last_config_poll = now
 
-        new_events = collector.collect_once(config)
-        if new_events:
-            state.append_events(new_events, max_items=config.max_spool_events)
+        _run_collect_phase(runtime)
 
-        if now - last_flush >= config.flush_interval_seconds:
-            batch = state.read_spool(config.event_batch_size)
-            if batch:
-                try:
-                    client.send_events(
-                        {
-                            "module_id": config.module_id,
-                            "protocol_version": config.protocol_version,
-                            "items": batch,
-                        }
-                    )
-                    state.drop_spool_items(len(batch))
-                    if health.issue_source == "batch":
-                        health.mark_ok(config, state)
-                except RuntimeError as exc:
-                    health.mark_warn(config, state, f"Event batch upload failed: {exc}", issue_source="batch")
-            elif health.issue_source == "batch":
-                health.mark_ok(config, state)
+        if now - last_flush >= runtime.config.flush_interval_seconds:
+            _run_flush_phase(runtime)
             last_flush = now
 
-        if now - last_heartbeat >= config.heartbeat_interval_seconds:
-            try:
-                heartbeat = client.heartbeat(
-                    {
-                        "module_id": config.module_id,
-                        "status": "online",
-                        "version": "1.0.0",
-                        "protocol_version": config.protocol_version,
-                        "config_revision_applied": config.config_revision,
-                        "details": health.to_details(config, state),
-                    }
-                )
-                desired_revision = int((heartbeat or {}).get("desired_config_revision") or config.config_revision)
-                if desired_revision != config.config_revision:
-                    try:
-                        config_response = client.fetch_config(config.module_id, config.protocol_version)
-                        config = _apply_remote_config(config, state, config_response)
-                        collector = AccessLogCollector(config, state)
-                        health.mark_ok(config, state)
-                    except ValueError as exc:
-                        health.mark_error(config, state, f"Invalid remote config: {exc}", issue_source="config")
-                    except RuntimeError as exc:
-                        health.mark_warn(config, state, f"Config sync failed: {exc}", issue_source="config_fetch")
-                elif health.issue_source in {"heartbeat", "register"}:
-                    health.mark_ok(config, state)
-            except RuntimeError as exc:
-                health.mark_warn(config, state, f"Heartbeat failed: {exc}", issue_source="heartbeat")
+        if now - last_heartbeat >= runtime.config.heartbeat_interval_seconds:
+            runtime = _run_heartbeat_phase(runtime)
             last_heartbeat = now
 
-        time.sleep(0.5)
+        time.sleep(LOOP_SLEEP_SECONDS)

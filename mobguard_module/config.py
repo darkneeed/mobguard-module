@@ -5,6 +5,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 
+MAX_EVENT_BATCH_SIZE = 1000
+MAX_SPOOL_EVENTS = 100_000
+
+
 def load_env_file(path: str) -> dict[str, str]:
     if not os.path.exists(path):
         return {}
@@ -27,15 +31,24 @@ def _env_int(values: dict[str, str], key: str, default: int) -> int:
         return default
 
 
-def _config_int(value: Any, default: int, *, field_name: str) -> int:
+def _config_int(
+    value: Any,
+    default: int,
+    *,
+    field_name: str,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     if value in (None, ""):
         return default
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be an integer") from exc
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be positive")
+    if parsed < minimum:
+        raise ValueError(f"{field_name} must be >= {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{field_name} must be <= {maximum}")
     return parsed
 
 
@@ -66,7 +79,10 @@ class ModuleConfig:
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "ModuleConfig":
-        values = {**load_env_file(env_path), **{key: value for key, value in os.environ.items() if value is not None}}
+        values = {
+            **load_env_file(env_path),
+            **{key: value for key, value in os.environ.items() if value is not None},
+        }
         return cls(
             panel_base_url=str(values.get("PANEL_BASE_URL", "")).rstrip("/"),
             module_id=str(values.get("MODULE_ID", "")).strip(),
@@ -74,11 +90,11 @@ class ModuleConfig:
             access_log_path=str(values.get("ACCESS_LOG_PATH", "/var/log/remnanode/access.log")).strip(),
             state_dir=str(values.get("STATE_DIR", "./state")).strip(),
             spool_dir=str(values.get("SPOOL_DIR", "./state/spool")).strip(),
-            heartbeat_interval_seconds=_env_int(values, "HEARTBEAT_INTERVAL_SECONDS", 30),
-            config_poll_interval_seconds=_env_int(values, "CONFIG_POLL_INTERVAL_SECONDS", 60),
-            flush_interval_seconds=_env_int(values, "FLUSH_INTERVAL_SECONDS", 3),
-            event_batch_size=_env_int(values, "EVENT_BATCH_SIZE", 100),
-            max_spool_events=_env_int(values, "MAX_SPOOL_EVENTS", 5000),
+            heartbeat_interval_seconds=max(_env_int(values, "HEARTBEAT_INTERVAL_SECONDS", 30), 1),
+            config_poll_interval_seconds=max(_env_int(values, "CONFIG_POLL_INTERVAL_SECONDS", 60), 1),
+            flush_interval_seconds=max(_env_int(values, "FLUSH_INTERVAL_SECONDS", 3), 1),
+            event_batch_size=max(_env_int(values, "EVENT_BATCH_SIZE", 100), 1),
+            max_spool_events=max(_env_int(values, "MAX_SPOOL_EVENTS", 5000), 1),
         )
 
     def apply_remote_config(self, envelope: dict[str, Any] | None) -> "ModuleConfig":
@@ -89,6 +105,20 @@ class ModuleConfig:
         inbound_tags = rules.get("inbound_tags")
         if inbound_tags in (None, ""):
             inbound_tags = rules.get("mobile_tags", [])
+        event_batch_size = _config_int(
+            runtime.get("event_batch_size"),
+            self.event_batch_size,
+            field_name="module_runtime.event_batch_size",
+            maximum=MAX_EVENT_BATCH_SIZE,
+        )
+        max_spool_events = _config_int(
+            runtime.get("max_spool_events"),
+            self.max_spool_events,
+            field_name="module_runtime.max_spool_events",
+            maximum=MAX_SPOOL_EVENTS,
+        )
+        if event_batch_size > max_spool_events:
+            raise ValueError("module_runtime.event_batch_size must not exceed module_runtime.max_spool_events")
         return replace(
             self,
             heartbeat_interval_seconds=_config_int(
@@ -106,16 +136,8 @@ class ModuleConfig:
                 self.flush_interval_seconds,
                 field_name="module_runtime.flush_interval_seconds",
             ),
-            event_batch_size=_config_int(
-                runtime.get("event_batch_size"),
-                self.event_batch_size,
-                field_name="module_runtime.event_batch_size",
-            ),
-            max_spool_events=_config_int(
-                runtime.get("max_spool_events"),
-                self.max_spool_events,
-                field_name="module_runtime.max_spool_events",
-            ),
+            event_batch_size=event_batch_size,
+            max_spool_events=max_spool_events,
             config_revision=_config_int(
                 envelope.get("config_revision"),
                 self.config_revision or 1,
