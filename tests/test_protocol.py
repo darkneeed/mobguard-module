@@ -59,3 +59,15 @@ def test_http_error_is_reported_without_retry():
 
     assert exc_info.value.kind == "http"
     assert exc_info.value.status_code == 503
+
+
+def test_send_events_uses_longer_timeout_for_event_batches():
+    client = PanelProtocolClient("https://panel.example.com", "token")
+
+    with patch("mobguard_module.protocol.urlopen", return_value=FakeResponse(b"{}")) as mocked_urlopen:
+        client.send_events({"items": []})
+
+    request = mocked_urlopen.call_args.args[0]
+    timeout = mocked_urlopen.call_args.kwargs["timeout"]
+    assert request.full_url == "https://panel.example.com/module/events/batch"
+    assert timeout == 60

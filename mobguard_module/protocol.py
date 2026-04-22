@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_TIMEOUT_SECONDS = 10
+DEFAULT_EVENT_BATCH_TIMEOUT_SECONDS = 60
 DEFAULT_RETRY_DELAY_SECONDS = 0.25
 
 
@@ -94,10 +95,11 @@ class PanelProtocolClient:
         *,
         payload: dict[str, Any] | None = None,
         query: dict[str, Any] | None = None,
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         request = self._build_request(method, path, payload=payload, query=query)
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
                 return self._decode_response(method, path, response.read())
         except HTTPError as exc:
             details = exc.read().decode("utf-8", errors="ignore")
@@ -121,11 +123,18 @@ class PanelProtocolClient:
         payload: dict[str, Any] | None = None,
         query: dict[str, Any] | None = None,
         retries: int = 0,
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         attempt = 0
         while True:
             try:
-                return self._perform_request(method, path, payload=payload, query=query)
+                return self._perform_request(
+                    method,
+                    path,
+                    payload=payload,
+                    query=query,
+                    timeout_seconds=timeout_seconds,
+                )
             except PanelProtocolError as exc:
                 if exc.retryable and attempt < retries:
                     attempt += 1
@@ -148,4 +157,9 @@ class PanelProtocolClient:
         )
 
     def send_events(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/events/batch", payload=payload)
+        return self._request(
+            "POST",
+            "/module/events/batch",
+            payload=payload,
+            timeout_seconds=DEFAULT_EVENT_BATCH_TIMEOUT_SECONDS,
+        )
