@@ -53,6 +53,19 @@ def test_parse_access_line_maps_non_uuid_string_to_username():
     assert "uuid" not in payload
 
 
+def test_parse_access_line_keeps_ip_only_scope_when_log_contains_header_like_tokens():
+    payload = parse_access_line(
+        "2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP x-hwid=hwid-1 user-agent=Happ",
+        ("SELFSTEAL_RU-YANDEX_TCP",),
+    )
+
+    assert payload is not None
+    assert payload["username"] == "alice"
+    assert payload["ip"] == "1.2.3.4"
+    assert "client_device_id" not in payload
+    assert "client_device_label" not in payload
+
+
 def test_parse_access_line_ignores_non_matching_line():
     assert parse_access_line("denied from tcp:1.2.3.4", ("TAG",)) is None
 

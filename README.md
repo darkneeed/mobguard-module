@@ -60,8 +60,9 @@ Runtime controls are still delivered through `module_runtime`:
 ## Device awareness
 
 - The current collector extracts IP, inbound tag, and identity fields from the access log.
-- It does not derive `client_device_id` from Xray access logs yet, so the updated panel will usually work in `ip-only` fallback mode.
-- If upstream log format starts exposing stable device identifiers, the module should be extended to pass `client_device_*` fields so the panel can use full `IP + device` scope.
+- It does not derive `client_device_id` or HWID from current RemnaNode/Xray access logs, so the updated panel will usually work in `ip-only` fallback mode.
+- Remnawave HWID/device inventory should be treated as panel-side enrichment when available; the collector should continue sending IP/provider/ASN/inbound activity from access logs.
+- If upstream log format starts exposing stable device identifiers, or if the module gains a second authoritative source besides `access.log`, the module can then be extended to pass `client_device_*` fields for full `IP + device` scope.
 
 ## Local `.env` fallback
 
