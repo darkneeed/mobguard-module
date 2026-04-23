@@ -126,7 +126,7 @@ def _bootstrap_runtime(env_path: str = ".env") -> tuple[ModuleRuntime, bool]:
 def _register_payload(runtime: ModuleRuntime) -> dict[str, Any]:
     return {
         "module_id": runtime.config.module_id,
-        "module_name": runtime.config.module_id,
+        "module_name": "",
         "version": "1.0.0",
         "protocol_version": runtime.config.protocol_version,
         "config_revision_applied": runtime.config.config_revision,
@@ -163,8 +163,6 @@ def _run_register_phase(runtime: ModuleRuntime, *, allow_cached_bootstrap: bool)
             raise
     except RuntimeError as exc:
         runtime.health.mark_warn(runtime.config, runtime.state, f"Register failed: {exc}", issue_source="register")
-        if not allow_cached_bootstrap:
-            raise
     return runtime
 
 
@@ -201,6 +199,8 @@ def _run_flush_phase(runtime: ModuleRuntime) -> None:
 
 
 def _run_heartbeat_phase(runtime: ModuleRuntime) -> ModuleRuntime:
+    if runtime.health.issue_source == "register":
+        return _run_register_phase(runtime, allow_cached_bootstrap=True)
     try:
         heartbeat = runtime.client.heartbeat(_heartbeat_payload(runtime))
         desired_revision = int((heartbeat or {}).get("desired_config_revision") or runtime.config.config_revision)

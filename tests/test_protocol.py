@@ -61,6 +61,25 @@ def test_http_error_is_reported_without_retry():
     assert exc_info.value.status_code == 503
 
 
+def test_register_retries_on_transient_http_503():
+    client = PanelProtocolClient("https://panel.example.com", "token", retry_delay_seconds=0)
+    first_error = HTTPError(
+        url="https://panel.example.com/module/register",
+        code=503,
+        msg="service unavailable",
+        hdrs=None,
+        fp=io.BytesIO(b'{"detail":"busy"}'),
+    )
+    with patch(
+        "mobguard_module.protocol.urlopen",
+        side_effect=[first_error, FakeResponse(b'{"module":{"module_id":"node-a"}}')],
+    ) as mocked_urlopen:
+        payload = client.register({"module_id": "node-a"})
+
+    assert payload["module"]["module_id"] == "node-a"
+    assert mocked_urlopen.call_count == 2
+
+
 def test_send_events_uses_longer_timeout_for_event_batches():
     client = PanelProtocolClient("https://panel.example.com", "token")
 
@@ -70,4 +89,23 @@ def test_send_events_uses_longer_timeout_for_event_batches():
     request = mocked_urlopen.call_args.args[0]
     timeout = mocked_urlopen.call_args.kwargs["timeout"]
     assert request.full_url == "https://panel.example.com/module/events/batch"
-    assert timeout == 60
+    assert timeout == 90
+
+
+def test_send_events_retries_on_transient_http_503():
+    client = PanelProtocolClient("https://panel.example.com", "token", retry_delay_seconds=0)
+    first_error = HTTPError(
+        url="https://panel.example.com/module/events/batch",
+        code=503,
+        msg="service unavailable",
+        hdrs=None,
+        fp=io.BytesIO(b'{"detail":"busy"}'),
+    )
+    with patch(
+        "mobguard_module.protocol.urlopen",
+        side_effect=[first_error, FakeResponse(b"{}")],
+    ) as mocked_urlopen:
+        payload = client.send_events({"items": [{"event_uid": "1"}]})
+
+    assert payload == {}
+    assert mocked_urlopen.call_count == 2

@@ -19,8 +19,10 @@ class FakeClient:
         self.heartbeat_error = None
         self.fetch_config_response = None
         self.fetch_config_error = None
+        self.register_payloads = []
 
     def register(self, payload):
+        self.register_payloads.append(payload)
         if self.register_error:
             raise self.register_error
         return self.register_response or {}
@@ -84,6 +86,25 @@ def test_register_phase_recovers_when_cached_config_is_available(tmp_path: Path)
     assert "Register failed" in updated.health.error_text
 
 
+def test_register_payload_does_not_override_panel_module_name(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+
+    _run_register_phase(runtime, allow_cached_bootstrap=True)
+
+    assert runtime.client.register_payloads[0]["module_name"] == ""
+
+
+def test_register_phase_does_not_raise_without_cached_config(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    runtime.client.register_error = RuntimeError("panel busy")
+
+    updated = _run_register_phase(runtime, allow_cached_bootstrap=False)
+
+    assert updated.health.health_status == "warn"
+    assert updated.health.issue_source == "register"
+    assert "Register failed" in updated.health.error_text
+
+
 def test_heartbeat_phase_refreshes_config_when_desired_revision_changes(tmp_path: Path):
     runtime = _runtime(tmp_path, config_revision=1, inbound_tags=("OLD",))
     runtime.client.heartbeat_response = {"desired_config_revision": 3}
@@ -106,3 +127,20 @@ def test_heartbeat_phase_refreshes_config_when_desired_revision_changes(tmp_path
     assert updated.config.config_revision == 3
     assert updated.config.inbound_tags == ("CANARY",)
     assert updated.health.health_status == "ok"
+
+
+def test_heartbeat_phase_retries_register_when_module_is_still_unregistered(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    runtime.health.mark_warn(runtime.config, runtime.state, "Register failed: busy", issue_source="register")
+    runtime.client.register_response = {
+        "config": {
+            "config_revision": 2,
+            "rules": {"inbound_tags": ["TAG"]},
+        }
+    }
+
+    updated = _run_heartbeat_phase(runtime)
+
+    assert updated.health.health_status == "ok"
+    assert updated.health.issue_source == ""
+    assert updated.config.config_revision == 2

@@ -54,8 +54,14 @@ Runtime controls are still delivered through `module_runtime`:
 - Spool writes are append-only in the steady state.
 - Spool depth is tracked via metadata and does not require a full file scan.
 - Dropped or acknowledged items advance the logical spool head and are compacted opportunistically.
-- Event batch uploads are not retried automatically after a response could already have been accepted by the panel.
-- `fetch_config` may retry once on transport failure only.
+- `register`, `heartbeat`, `fetch_config`, and `events/batch` retry automatically on transient transport and `429/502/503/504` panel errors.
+- Event uploads remain safe to retry because the panel deduplicates by `event_uid`.
+
+## Device awareness
+
+- The current collector extracts IP, inbound tag, and identity fields from the access log.
+- It does not derive `client_device_id` from Xray access logs yet, so the updated panel will usually work in `ip-only` fallback mode.
+- If upstream log format starts exposing stable device identifiers, the module should be extended to pass `client_device_*` fields so the panel can use full `IP + device` scope.
 
 ## Local `.env` fallback
 

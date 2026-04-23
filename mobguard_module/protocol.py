@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -8,9 +9,14 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-DEFAULT_TIMEOUT_SECONDS = 10
-DEFAULT_EVENT_BATCH_TIMEOUT_SECONDS = 60
-DEFAULT_RETRY_DELAY_SECONDS = 0.25
+DEFAULT_TIMEOUT_SECONDS = 20
+DEFAULT_EVENT_BATCH_TIMEOUT_SECONDS = 90
+DEFAULT_RETRY_DELAY_SECONDS = 1.0
+DEFAULT_REGISTER_RETRIES = 3
+DEFAULT_HEARTBEAT_RETRIES = 3
+DEFAULT_CONFIG_RETRIES = 2
+DEFAULT_EVENT_BATCH_RETRIES = 3
+RETRYABLE_HTTP_STATUS_CODES = {429, 502, 503, 504}
 
 
 class PanelProtocolError(RuntimeError):
@@ -106,12 +112,19 @@ class PanelProtocolClient:
             raise PanelProtocolError(
                 f"{method} {path} failed with HTTP {exc.code}: {details}",
                 kind="http",
+                retryable=exc.code in RETRYABLE_HTTP_STATUS_CODES,
                 status_code=exc.code,
             ) from exc
         except URLError as exc:
             raise PanelProtocolError(
                 f"{method} {path} failed: {exc.reason}",
                 kind="network",
+                retryable=True,
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise PanelProtocolError(
+                f"{method} {path} timed out",
+                kind="timeout",
                 retryable=True,
             ) from exc
 
@@ -143,17 +156,27 @@ class PanelProtocolClient:
                 raise
 
     def register(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/register", payload=payload)
+        return self._request(
+            "POST",
+            "/module/register",
+            payload=payload,
+            retries=DEFAULT_REGISTER_RETRIES,
+        )
 
     def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", "/module/heartbeat", payload=payload)
+        return self._request(
+            "POST",
+            "/module/heartbeat",
+            payload=payload,
+            retries=DEFAULT_HEARTBEAT_RETRIES,
+        )
 
     def fetch_config(self, module_id: str, protocol_version: str = "v1") -> dict[str, Any]:
         return self._request(
             "GET",
             "/module/config",
             query={"module_id": module_id, "protocol_version": protocol_version},
-            retries=1,
+            retries=DEFAULT_CONFIG_RETRIES,
         )
 
     def send_events(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -161,5 +184,6 @@ class PanelProtocolClient:
             "POST",
             "/module/events/batch",
             payload=payload,
+            retries=DEFAULT_EVENT_BATCH_RETRIES,
             timeout_seconds=DEFAULT_EVENT_BATCH_TIMEOUT_SECONDS,
         )
