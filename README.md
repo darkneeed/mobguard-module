@@ -75,6 +75,28 @@ Required keys:
 - `MODULE_TOKEN`
 - `ACCESS_LOG_PATH`
 
+For standalone local work against the panel dev stack:
+
+- keep tracked defaults in ignored `.env`
+- put local-only collector overrides in ignored `.env.local.dev`
+- use the local helpers instead of editing tracked config
+
+Windows:
+
+```powershell
+.\start-local-dev.ps1
+.\stop-local-dev.ps1
+```
+
+Linux/macOS:
+
+```bash
+./start-local-dev.sh
+./stop-local-dev.sh
+```
+
+The helper writes a generated env file into ignored `runtime-logs/local-dev/env/module.env`, forces `PANEL_BASE_URL=http://127.0.0.1:8000`, and defaults `ACCESS_LOG_PATH` to `runtime-logs/local-dev/access.log` when you do not provide one in `.env.local.dev`.
+
 ## Test
 
 ```bash

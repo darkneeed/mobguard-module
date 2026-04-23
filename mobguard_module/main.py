@@ -102,7 +102,7 @@ def _apply_remote_config(runtime: ModuleRuntime, response: dict[str, Any] | None
     return replace(runtime, config=updated_config, collector=AccessLogCollector(updated_config, runtime.state))
 
 
-def _bootstrap_runtime(env_path: str = ".env") -> tuple[ModuleRuntime, bool]:
+def _bootstrap_runtime(env_path: str | None = None) -> tuple[ModuleRuntime, bool]:
     config = ModuleConfig.from_env(env_path)
     if not config.panel_base_url or not config.module_id or not config.module_token:
         raise SystemExit("PANEL_BASE_URL, MODULE_ID and MODULE_TOKEN are required")

@@ -7,6 +7,7 @@ from typing import Any
 
 MAX_EVENT_BATCH_SIZE = 1000
 MAX_SPOOL_EVENTS = 100_000
+DEFAULT_ENV_PATH = ".env"
 
 
 def load_env_file(path: str) -> dict[str, str]:
@@ -78,9 +79,15 @@ class ModuleConfig:
     inbound_tags: tuple[str, ...] = ()
 
     @classmethod
-    def from_env(cls, env_path: str = ".env") -> "ModuleConfig":
+    def from_env(cls, env_path: str | None = None) -> "ModuleConfig":
+        resolved_env_path = str(
+            env_path
+            or os.getenv("MOBGUARD_MODULE_ENV_FILE")
+            or os.getenv("MOBGUARD_ENV_FILE")
+            or DEFAULT_ENV_PATH
+        )
         values = {
-            **load_env_file(env_path),
+            **load_env_file(resolved_env_path),
             **{key: value for key, value in os.environ.items() if value is not None},
         }
         return cls(

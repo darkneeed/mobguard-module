@@ -34,3 +34,29 @@ def test_local_state_recovers_spool_metadata_after_restart(tmp_path: Path):
 
     assert reloaded.get_spool_depth() == 1
     assert [item["event_uid"] for item in reloaded.read_spool(10)] == ["3"]
+
+
+def test_local_state_compacts_spool_without_materializing_active_items(tmp_path: Path, monkeypatch):
+    state = LocalState(str(tmp_path / "state"), str(tmp_path / "state" / "spool"))
+    state.ensure_dirs()
+    monkeypatch.setattr(state, "COMPACT_MIN_HEAD_BYTES", 1)
+    state.append_events(
+        [
+            {"event_uid": "1", "payload": "x" * 128},
+            {"event_uid": "2", "payload": "y" * 128},
+            {"event_uid": "3", "payload": "z" * 128},
+        ],
+        max_items=10,
+    )
+
+    def _unexpected_read_spool(_max_items: int):
+        raise AssertionError("compaction should stream the spool file directly")
+
+    monkeypatch.setattr(state, "read_spool", _unexpected_read_spool)
+
+    state.drop_spool_items(1)
+
+    reloaded = LocalState(str(tmp_path / "state"), str(tmp_path / "state" / "spool"))
+    reloaded.ensure_dirs()
+    assert reloaded.get_spool_depth() == 2
+    assert [item["event_uid"] for item in reloaded.read_spool(10)] == ["2", "3"]

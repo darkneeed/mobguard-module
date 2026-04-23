@@ -212,13 +212,17 @@ class LocalState:
         head_offset = int(meta.get("head_offset", 0))
         if head_offset < self.COMPACT_MIN_HEAD_BYTES and head_offset < file_size // 2:
             return
-        active_items = self.read_spool(int(meta["item_count"]))
         tmp_path = f"{self.spool_path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            for item in active_items:
-                handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+        kept_count = 0
+        with open(self.spool_path, "r", encoding="utf-8") as source, open(tmp_path, "w", encoding="utf-8") as handle:
+            source.seek(head_offset)
+            for raw_line in source:
+                if not raw_line.strip():
+                    continue
+                handle.write(raw_line if raw_line.endswith("\n") else f"{raw_line}\n")
+                kept_count += 1
         os.replace(tmp_path, self.spool_path)
-        self._save_spool_meta({"head_offset": 0, "item_count": len(active_items)})
+        self._save_spool_meta({"head_offset": 0, "item_count": kept_count})
 
     def _reset_spool(self) -> dict[str, int]:
         os.makedirs(self.spool_dir, exist_ok=True)

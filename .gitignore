@@ -1,5 +1,7 @@
 .env
+.env.local.dev
 __pycache__/
 .pytest_cache/
 state/
+runtime-logs/
 *.pyc

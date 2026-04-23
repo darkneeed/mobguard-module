@@ -91,3 +91,27 @@ def test_module_config_rejects_pathological_batch_sizes(monkeypatch, tmp_path):
                 },
             }
         )
+
+
+def test_module_config_can_bootstrap_from_explicit_local_env_file(monkeypatch, tmp_path):
+    env_path = tmp_path / "local.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "PANEL_BASE_URL=http://127.0.0.1:8000",
+                "MODULE_ID=module-local",
+                "MODULE_TOKEN=token-local",
+                "ACCESS_LOG_PATH=/tmp/module-access.log",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOBGUARD_MODULE_ENV_FILE", str(env_path))
+
+    cfg = ModuleConfig.from_env()
+
+    assert cfg.panel_base_url == "http://127.0.0.1:8000"
+    assert cfg.module_id == "module-local"
+    assert cfg.module_token == "token-local"
+    assert cfg.access_log_path == "/tmp/module-access.log"
