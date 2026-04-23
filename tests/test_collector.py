@@ -53,17 +53,21 @@ def test_parse_access_line_maps_non_uuid_string_to_username():
     assert "uuid" not in payload
 
 
-def test_parse_access_line_keeps_ip_only_scope_when_log_contains_header_like_tokens():
+def test_parse_access_line_extracts_device_headers_when_present():
     payload = parse_access_line(
-        "2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP x-hwid=hwid-1 user-agent=Happ",
+        '2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP x-hwid=hwid-1 x-device-os=Android x-ver-os=15 x-device-model="Pixel 8 Pro" user-agent=Happ/1.2.3',
         ("SELFSTEAL_RU-YANDEX_TCP",),
     )
 
     assert payload is not None
     assert payload["username"] == "alice"
     assert payload["ip"] == "1.2.3.4"
-    assert "client_device_id" not in payload
-    assert "client_device_label" not in payload
+    assert payload["client_device_id"] == "hwid-1"
+    assert payload["client_device_label"] == "Pixel 8 Pro"
+    assert payload["client_os_family"] == "Android"
+    assert payload["client_os_version"] == "15"
+    assert payload["client_app_name"] == "Happ"
+    assert payload["client_app_version"] == "1.2.3"
 
 
 def test_parse_access_line_ignores_non_matching_line():
@@ -95,3 +99,50 @@ def test_collect_once_resets_cursor_after_log_rotation(tmp_path: Path):
     assert len(second_batch) == 1
     assert second_batch[0]["username"] == "alice"
     assert second_batch[0]["ip"] == "5.6.7.8"
+
+
+def test_collect_once_suppresses_duplicate_events_within_five_minutes(tmp_path: Path):
+    access_log_path = tmp_path / "access.log"
+    access_log_path.write_text(
+        "\n".join(
+            [
+                "2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP",
+                "2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = _module_config(tmp_path, access_log_path)
+    state = LocalState(config.state_dir, config.spool_dir)
+    state.ensure_dirs()
+    collector = AccessLogCollector(config, state)
+
+    batch = collector.collect_once(config)
+
+    assert len(batch) == 1
+    assert batch[0]["username"] == "alice"
+    assert batch[0]["ip"] == "1.2.3.4"
+
+
+def test_collect_once_keeps_distinct_ips_even_inside_suppression_window(tmp_path: Path):
+    access_log_path = tmp_path / "access.log"
+    access_log_path.write_text(
+        "\n".join(
+            [
+                "2026-01-01 accepted email: alice from tcp:1.2.3.4 SELFSTEAL_RU-YANDEX_TCP",
+                "2026-01-01 accepted email: alice from tcp:1.2.3.5 SELFSTEAL_RU-YANDEX_TCP",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = _module_config(tmp_path, access_log_path)
+    state = LocalState(config.state_dir, config.spool_dir)
+    state.ensure_dirs()
+    collector = AccessLogCollector(config, state)
+
+    batch = collector.collect_once(config)
+
+    assert len(batch) == 2
+    assert {item["ip"] for item in batch} == {"1.2.3.4", "1.2.3.5"}

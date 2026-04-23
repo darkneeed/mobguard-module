@@ -5,6 +5,7 @@ from mobguard_module.config import ModuleConfig
 from mobguard_module.main import (
     ModuleHealthState,
     ModuleRuntime,
+    _align_cursor_to_log_tail,
     _run_heartbeat_phase,
     _run_register_phase,
 )
@@ -144,3 +145,17 @@ def test_heartbeat_phase_retries_register_when_module_is_still_unregistered(tmp_
     assert updated.health.health_status == "ok"
     assert updated.health.issue_source == ""
     assert updated.config.config_revision == 2
+
+
+def test_align_cursor_to_log_tail_skips_existing_log_backfill(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    access_log_path = Path(runtime.config.access_log_path)
+    access_log_path.write_text(
+        "2026-01-01 accepted email: alice from tcp:1.2.3.4 TAG\n",
+        encoding="utf-8",
+    )
+
+    _align_cursor_to_log_tail(runtime)
+    batch = runtime.collector.collect_once(runtime.config)
+
+    assert batch == []

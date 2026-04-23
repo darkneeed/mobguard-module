@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
-from .collector import AccessLogCollector
+from .collector import AccessLogCollector, file_fingerprint
 from .config import ModuleConfig
 from .protocol import PanelProtocolClient
 from .state import LocalState
@@ -93,6 +93,17 @@ class ModuleRuntime:
     health: ModuleHealthState
 
 
+def _align_cursor_to_log_tail(runtime: ModuleRuntime) -> None:
+    access_log_path = runtime.config.access_log_path
+    if os.path.exists(access_log_path):
+        runtime.state.set_cursor_state(
+            os.path.getsize(access_log_path),
+            file_fingerprint(access_log_path),
+        )
+        return
+    runtime.state.set_cursor_state(0, None)
+
+
 def _apply_remote_config(runtime: ModuleRuntime, response: dict[str, Any] | None) -> ModuleRuntime:
     envelope = (response or {}).get("config") if isinstance((response or {}).get("config"), dict) else response
     if not isinstance(envelope, dict):
@@ -119,6 +130,7 @@ def _bootstrap_runtime(env_path: str | None = None) -> tuple[ModuleRuntime, bool
         collector=AccessLogCollector(config, state),
         health=health,
     )
+    _align_cursor_to_log_tail(runtime)
     runtime.health.mark_ok(runtime.config, runtime.state)
     return runtime, bool(cached_config)
 

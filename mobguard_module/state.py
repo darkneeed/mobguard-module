@@ -43,6 +43,7 @@ class LocalState:
         self.cursor_path = os.path.join(state_dir, "cursor.txt")
         self.cursor_meta_path = os.path.join(state_dir, "cursor-meta.json")
         self.config_cache_path = os.path.join(state_dir, "config-cache.json")
+        self.recent_events_path = os.path.join(state_dir, "recent-events.json")
         self.spool_path = os.path.join(spool_dir, "events.jsonl")
         self.spool_meta_path = os.path.join(spool_dir, "meta.json")
 
@@ -87,6 +88,24 @@ class LocalState:
                 "file_fingerprint": str(file_fingerprint) if file_fingerprint not in (None, "") else None,
             },
         )
+
+    def load_recent_event_markers(self) -> dict[str, str]:
+        payload = _load_json(self.recent_events_path)
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            str(key).strip(): str(value).strip()
+            for key, value in payload.items()
+            if str(key).strip() and str(value).strip()
+        }
+
+    def save_recent_event_markers(self, markers: dict[str, str]) -> None:
+        normalized = {
+            str(key).strip(): str(value).strip()
+            for key, value in markers.items()
+            if str(key).strip() and str(value).strip()
+        }
+        _atomic_write_json(self.recent_events_path, normalized)
 
     def load_cached_config(self) -> dict[str, Any] | None:
         return _load_json(self.config_cache_path)
