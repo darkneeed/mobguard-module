@@ -6,6 +6,7 @@ from mobguard_module.main import (
     ModuleHealthState,
     ModuleRuntime,
     _align_cursor_to_log_tail,
+    _heartbeat_payload,
     _run_heartbeat_phase,
     _run_register_phase,
 )
@@ -42,6 +43,20 @@ class FakeClient:
         return {}
 
 
+class FakeTelemetry:
+    def collect(self):
+        return {
+            "system": {
+                "cpu_percent": 12.5,
+                "memory_percent": 42.0,
+            },
+            "processes": {
+                "match_count": 1,
+                "cpu_percent": 0.5,
+            },
+        }
+
+
 def _runtime(tmp_path: Path, *, config_revision: int = 1, inbound_tags: tuple[str, ...] = ("TAG",)):
     access_log_path = tmp_path / "access.log"
     access_log_path.write_text("", encoding="utf-8")
@@ -64,6 +79,7 @@ def _runtime(tmp_path: Path, *, config_revision: int = 1, inbound_tags: tuple[st
         client=FakeClient(),
         collector=AccessLogCollector(config, state),
         health=health,
+        telemetry=FakeTelemetry(),
     )
     runtime.health.mark_ok(runtime.config, runtime.state)
     return runtime
@@ -145,6 +161,16 @@ def test_heartbeat_phase_retries_register_when_module_is_still_unregistered(tmp_
     assert updated.health.health_status == "ok"
     assert updated.health.issue_source == ""
     assert updated.config.config_revision == 2
+
+
+def test_heartbeat_payload_includes_runtime_telemetry(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+
+    payload = _heartbeat_payload(runtime)
+
+    assert payload["details"]["system"]["cpu_percent"] == 12.5
+    assert payload["details"]["system"]["memory_percent"] == 42.0
+    assert payload["details"]["processes"]["match_count"] == 1
 
 
 def test_align_cursor_to_log_tail_skips_existing_log_backfill(tmp_path: Path):

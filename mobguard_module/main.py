@@ -10,6 +10,7 @@ from .collector import AccessLogCollector, file_fingerprint
 from .config import ModuleConfig
 from .protocol import PanelProtocolClient
 from .state import LocalState
+from .telemetry import RuntimeTelemetryCollector
 
 
 LOOP_SLEEP_SECONDS = 0.5
@@ -60,7 +61,12 @@ class ModuleHealthState:
         self.error_text = str(error_text or "").strip()
         self.issue_source = issue_source
 
-    def to_details(self, config: ModuleConfig, state: LocalState) -> dict[str, Any]:
+    def to_details(
+        self,
+        config: ModuleConfig,
+        state: LocalState,
+        telemetry: RuntimeTelemetryCollector | None = None,
+    ) -> dict[str, Any]:
         access_log_exists, spool_depth = self._refresh_runtime(config, state)
         status = self.health_status
         error_text = self.error_text
@@ -75,13 +81,16 @@ class ModuleHealthState:
                 error_text = ""
             self.health_status = status
             self.error_text = error_text
-        return {
+        payload = {
             "health_status": status,
             "error_text": error_text,
             "last_validation_at": self.last_validation_at,
             "spool_depth": spool_depth,
             "access_log_exists": access_log_exists,
         }
+        if telemetry is not None:
+            payload.update(telemetry.collect())
+        return payload
 
 
 @dataclass(frozen=True)
@@ -91,6 +100,7 @@ class ModuleRuntime:
     client: PanelProtocolClient
     collector: AccessLogCollector
     health: ModuleHealthState
+    telemetry: RuntimeTelemetryCollector | None = None
 
 
 def _align_cursor_to_log_tail(runtime: ModuleRuntime) -> None:
@@ -129,6 +139,7 @@ def _bootstrap_runtime(env_path: str | None = None) -> tuple[ModuleRuntime, bool
         client=PanelProtocolClient(config.panel_base_url, config.module_token),
         collector=AccessLogCollector(config, state),
         health=health,
+        telemetry=RuntimeTelemetryCollector(),
     )
     _align_cursor_to_log_tail(runtime)
     runtime.health.mark_ok(runtime.config, runtime.state)
@@ -160,7 +171,11 @@ def _heartbeat_payload(runtime: ModuleRuntime) -> dict[str, Any]:
         "version": "1.0.0",
         "protocol_version": runtime.config.protocol_version,
         "config_revision_applied": runtime.config.config_revision,
-        "details": runtime.health.to_details(runtime.config, runtime.state),
+        "details": runtime.health.to_details(
+            runtime.config,
+            runtime.state,
+            telemetry=runtime.telemetry,
+        ),
     }
 
 
